@@ -35,6 +35,26 @@
             text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
         }
 
+        .status-bar {
+            text-align: center;
+            margin-bottom: 20px;
+            padding: 10px;
+            border-radius: 10px;
+            font-weight: bold;
+        }
+
+        .status-connected {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status-disconnected {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
         .calendar-container {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -118,14 +138,9 @@
             cursor: not-allowed;
         }
 
-        .note-indicator {
-            position: absolute;
-            top: 2px;
-            right: 2px;
-            width: 8px;
-            height: 8px;
-            background: #ff9800;
-            border-radius: 50%;
+        .day.loading {
+            opacity: 0.5;
+            pointer-events: none;
         }
 
         .modal {
@@ -183,12 +198,17 @@
             transition: all 0.3s ease;
         }
 
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
         .btn-save {
             background: #4caf50;
             color: white;
         }
 
-        .btn-save:hover {
+        .btn-save:hover:not(:disabled) {
             background: #45a049;
         }
 
@@ -197,7 +217,7 @@
             color: white;
         }
 
-        .btn-delete:hover {
+        .btn-delete:hover:not(:disabled) {
             background: #d32f2f;
         }
 
@@ -231,6 +251,21 @@
             border-radius: 4px;
         }
 
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
         @media (max-width: 768px) {
             .calendar-container {
                 grid-template-columns: 1fr;
@@ -254,6 +289,10 @@
 <body>
     <div class="container">
         <h1>📅 Calendario Agosto - Septiembre 2025</h1>
+        
+        <div id="statusBar" class="status-bar status-disconnected">
+            🔄 Conectando con Firebase...
+        </div>
         
         <div class="calendar-container">
             <!-- Calendario Agosto -->
@@ -295,14 +334,48 @@
             <h3 id="modal-title">Nota para el día</h3>
             <textarea id="noteText" placeholder="Escribe tu nota aquí..."></textarea>
             <div class="modal-buttons">
-                <button class="btn btn-save" onclick="saveNote()">💾 Guardar</button>
-                <button class="btn btn-delete" onclick="deleteNote()">🗑️ Eliminar</button>
+                <button class="btn btn-save" id="saveBtn" onclick="saveNote()">
+                    <span id="saveText">💾 Guardar</span>
+                    <span id="saveSpinner" class="loading-spinner" style="display: none;"></span>
+                </button>
+                <button class="btn btn-delete" id="deleteBtn" onclick="deleteNote()">🗑️ Eliminar</button>
                 <button class="btn btn-cancel" onclick="closeModal()">❌ Cancelar</button>
             </div>
         </div>
     </div>
 
-    <script>
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getFirestore, collection, doc, setDoc, getDoc, deleteDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+        // Configuración de Firebase
+        const firebaseConfig = {
+            apiKey: "AIzaSyBscrhDCN1zWUIkQ49uKitCw_z0ppNoN5I",
+            authDomain: "pagosyaru.firebaseapp.com",
+            projectId: "pagosyaru",
+            storageBucket: "pagosyaru.firebasestorage.app",
+            messagingSenderId: "788387817886",
+            appId: "1:788387817886:web:d9546cd91afc0b5d5d8e8f"
+        };
+
+        // Inicializar Firebase
+        let app, db, isFirebaseConnected = false;
+        
+        try {
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            isFirebaseConnected = true;
+            updateStatus('✅ Conectado a Firebase', 'connected');
+        } catch (error) {
+            console.error('Error al conectar con Firebase:', error);
+            updateStatus('❌ Error de conexión - Usando modo offline', 'disconnected');
+        }
+
+        // Variables globales
+        window.db = db;
+        window.isFirebaseConnected = isFirebaseConnected;
+        
         // Datos de días festivos para Colombia
         const holidays = {
             '2025-08-07': 'Batalla de Boyacá',
@@ -310,14 +383,106 @@
             '2025-09-15': 'Día de la Independencia (trasladado)'
         };
 
-        // Almacenamiento de notas (simula localStorage)
+        // Almacenamiento de notas
         let notes = {};
         let selectedDate = null;
-
-        // Nombres de días de la semana
         const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 
-        // Función para generar el calendario
+        // Funciones Firebase
+        window.saveNoteToFirebase = async function(date, noteText) {
+            if (!isFirebaseConnected) {
+                // Fallback a localStorage
+                const localNotes = JSON.parse(localStorage.getItem('calendar-notes') || '{}');
+                if (noteText.trim()) {
+                    localNotes[date] = noteText;
+                } else {
+                    delete localNotes[date];
+                }
+                localStorage.setItem('calendar-notes', JSON.stringify(localNotes));
+                return true;
+            }
+
+            try {
+                if (noteText.trim()) {
+                    await setDoc(doc(db, 'calendar-notes', date), {
+                        text: noteText,
+                        timestamp: new Date().toISOString()
+                    });
+                } else {
+                    await deleteDoc(doc(db, 'calendar-notes', date));
+                }
+                return true;
+            } catch (error) {
+                console.error('Error guardando en Firebase:', error);
+                throw error;
+            }
+        };
+
+        window.loadNoteFromFirebase = async function(date) {
+            if (!isFirebaseConnected) {
+                // Fallback a localStorage
+                const localNotes = JSON.parse(localStorage.getItem('calendar-notes') || '{}');
+                return localNotes[date] || null;
+            }
+
+            try {
+                const docRef = doc(db, 'calendar-notes', date);
+                const docSnap = await getDoc(docRef);
+                
+                if (docSnap.exists()) {
+                    return docSnap.data().text;
+                }
+                return null;
+            } catch (error) {
+                console.error('Error cargando desde Firebase:', error);
+                return null;
+            }
+        };
+
+        window.loadAllNotesFromFirebase = async function() {
+            if (!isFirebaseConnected) {
+                // Fallback a localStorage
+                return JSON.parse(localStorage.getItem('calendar-notes') || '{}');
+            }
+
+            try {
+                const allNotes = {};
+                // Listener en tiempo real para todas las notas
+                const unsubscribe = onSnapshot(collection(db, 'calendar-notes'), (querySnapshot) => {
+                    querySnapshot.forEach((doc) => {
+                        allNotes[doc.id] = doc.data().text;
+                        notes[doc.id] = doc.data().text;
+                    });
+                    
+                    // Actualizar visualización
+                    updateAllDaysDisplay();
+                });
+                
+                return allNotes;
+            } catch (error) {
+                console.error('Error cargando todas las notas:', error);
+                return {};
+            }
+        };
+
+        // Funciones de UI
+        function updateStatus(message, type) {
+            const statusBar = document.getElementById('statusBar');
+            statusBar.textContent = message;
+            statusBar.className = `status-bar status-${type}`;
+        }
+
+        function setButtonLoading(buttonId, loading) {
+            const button = document.getElementById(buttonId);
+            const text = document.getElementById(buttonId.replace('Btn', 'Text'));
+            const spinner = document.getElementById(buttonId.replace('Btn', 'Spinner'));
+            
+            button.disabled = loading;
+            if (text) text.style.display = loading ? 'none' : 'inline';
+            if (spinner) spinner.style.display = loading ? 'inline-block' : 'none';
+        }
+
+        // Generar calendario
         function generateCalendar(year, month, containerId) {
             const container = document.getElementById(containerId);
             const firstDay = new Date(year, month, 1);
@@ -325,10 +490,9 @@
             const startDate = new Date(firstDay);
             startDate.setDate(startDate.getDate() - firstDay.getDay());
 
-            // Limpiar contenido previo
             container.innerHTML = '';
 
-            // Añadir encabezados de días
+            // Encabezados
             dayNames.forEach(day => {
                 const dayHeader = document.createElement('div');
                 dayHeader.className = 'day-header';
@@ -336,7 +500,7 @@
                 container.appendChild(dayHeader);
             });
 
-            // Generar días del calendario
+            // Días
             const currentDate = new Date(startDate);
             for (let i = 0; i < 42; i++) {
                 const dayElement = document.createElement('div');
@@ -346,19 +510,16 @@
                 const dateString = currentDate.toISOString().split('T')[0];
                 dayElement.setAttribute('data-date', dateString);
 
-                // Marcar días de otros meses
                 if (currentDate.getMonth() !== month) {
                     dayElement.classList.add('other-month');
                 } else {
                     dayElement.addEventListener('click', () => openModal(dateString));
                     
-                    // Marcar días festivos
                     if (holidays[dateString]) {
                         dayElement.classList.add('holiday');
                         dayElement.title = holidays[dateString];
                     }
                     
-                    // Marcar días con notas
                     if (notes[dateString]) {
                         dayElement.classList.add('has-note');
                     }
@@ -369,8 +530,23 @@
             }
         }
 
-        // Función para abrir el modal
-        function openModal(date) {
+        function updateDayDisplay(date) {
+            const dayElements = document.querySelectorAll(`[data-date="${date}"]`);
+            dayElements.forEach(dayEl => {
+                if (notes[date]) {
+                    dayEl.classList.add('has-note');
+                } else {
+                    dayEl.classList.remove('has-note');
+                }
+            });
+        }
+
+        function updateAllDaysDisplay() {
+            Object.keys(notes).forEach(date => updateDayDisplay(date));
+        }
+
+        // Modal functions
+        window.openModal = async function(date) {
             selectedDate = date;
             const modal = document.getElementById('noteModal');
             const title = document.getElementById('modal-title');
@@ -385,83 +561,95 @@
             };
             
             title.textContent = `Nota para ${dateObj.toLocaleDateString('es-ES', options)}`;
-            noteText.value = notes[date] || '';
+            
+            // Cargar nota desde Firebase
+            try {
+                const existingNote = await loadNoteFromFirebase(date);
+                noteText.value = existingNote || '';
+            } catch (error) {
+                noteText.value = notes[date] || '';
+            }
             
             modal.style.display = 'block';
-        }
+        };
 
-        // Función para cerrar el modal
-        function closeModal() {
+        window.closeModal = function() {
             document.getElementById('noteModal').style.display = 'none';
             selectedDate = null;
-        }
+        };
 
-        // Función para guardar nota
-        function saveNote() {
-            const noteText = document.getElementById('noteText').value;
-            if (selectedDate) {
+        window.saveNote = async function() {
+            const noteTextElement = document.getElementById('noteText');
+            const noteText = noteTextElement.value;
+            
+            if (!selectedDate) return;
+
+            setButtonLoading('saveBtn', true);
+
+            try {
+                await saveNoteToFirebase(selectedDate, noteText);
+                
                 if (noteText.trim()) {
                     notes[selectedDate] = noteText;
                 } else {
                     delete notes[selectedDate];
                 }
                 
-                // Actualizar visualización
                 updateDayDisplay(selectedDate);
-                
-                // Simular guardado persistente
-                console.log('Nota guardada:', selectedDate, noteText);
                 alert('¡Nota guardada correctamente!');
+                closeModal();
+            } catch (error) {
+                alert('Error al guardar la nota. Inténtalo de nuevo.');
+            } finally {
+                setButtonLoading('saveBtn', false);
             }
-            closeModal();
-        }
+        };
 
-        // Función para eliminar nota
-        function deleteNote() {
-            if (selectedDate && notes[selectedDate]) {
+        window.deleteNote = async function() {
+            if (!selectedDate || !notes[selectedDate]) return;
+
+            setButtonLoading('deleteBtn', true);
+
+            try {
+                await saveNoteToFirebase(selectedDate, '');
                 delete notes[selectedDate];
                 updateDayDisplay(selectedDate);
                 alert('¡Nota eliminada correctamente!');
+                closeModal();
+            } catch (error) {
+                alert('Error al eliminar la nota. Inténtalo de nuevo.');
+            } finally {
+                setButtonLoading('deleteBtn', false);
             }
-            closeModal();
-        }
+        };
 
-        // Función para actualizar la visualización de un día
-        function updateDayDisplay(date) {
-            const dayElements = document.querySelectorAll(`[data-date="${date}"]`);
-            dayElements.forEach(dayEl => {
-                if (notes[date]) {
-                    dayEl.classList.add('has-note');
-                } else {
-                    dayEl.classList.remove('has-note');
-                }
-            });
-        }
-
-        // Cerrar modal al hacer clic fuera
+        // Event listeners
         window.onclick = function(event) {
             const modal = document.getElementById('noteModal');
             if (event.target === modal) {
                 closeModal();
             }
-        }
+        };
 
-        // Cerrar modal con Escape
         document.addEventListener('keydown', function(event) {
             if (event.key === 'Escape') {
                 closeModal();
             }
         });
 
-        // Inicializar calendarios
-        document.addEventListener('DOMContentLoaded', function() {
-            generateCalendar(2025, 7, 'august-calendar'); // Agosto (mes 7)
-            generateCalendar(2025, 8, 'september-calendar'); // Septiembre (mes 8)
+        // Inicializar
+        document.addEventListener('DOMContentLoaded', async function() {
+            generateCalendar(2025, 7, 'august-calendar');
+            generateCalendar(2025, 8, 'september-calendar');
+            
+            // Cargar notas
+            try {
+                notes = await loadAllNotesFromFirebase();
+                updateAllDaysDisplay();
+            } catch (error) {
+                console.error('Error cargando notas:', error);
+            }
         });
-
-        // Datos de ejemplo (opcional)
-        notes['2025-08-15'] = 'Reunión importante a las 3 PM';
-        notes['2025-09-01'] = 'Inicio del nuevo semestre';
     </script>
 </body>
 </html>
