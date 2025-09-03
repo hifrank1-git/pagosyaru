@@ -625,15 +625,32 @@
 
         // Event listeners
         window.onclick = function(event) {
-            const modal = document.getElementById('noteModal');
-            if (event.target === modal) {
+            const noteModal = document.getElementById('noteModal');
+            const passwordModal = document.getElementById('passwordModal');
+            
+            if (event.target === noteModal) {
                 closeModal();
+            }
+            if (event.target === passwordModal) {
+                cancelPassword();
             }
         };
 
         document.addEventListener('keydown', function(event) {
+            const passwordModal = document.getElementById('passwordModal');
+            const noteModal = document.getElementById('noteModal');
+            
             if (event.key === 'Escape') {
-                closeModal();
+                if (passwordModal.style.display === 'block') {
+                    cancelPassword();
+                } else if (noteModal.style.display === 'block') {
+                    closeModal();
+                }
+            }
+            
+            // Permitir Enter en el modal de contraseña
+            if (event.key === 'Enter' && passwordModal.style.display === 'block') {
+                confirmPassword();
             }
         });
 
